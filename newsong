@@ -122,11 +122,17 @@ async def auth():
     print(f"\n  ✅ Logged in as {me.first_name} (@{me.username})")
     print(f"\n  ⚙️  Configuring @deezload2bot quality to FLAC...")
     await mod.ensure_flac_quality(client)
+    # Print friendly message (ensure_flac_quality prints QUALITY_SET as signal)
     open("/tmp/newsong_quality_ok", "w").close()
     await client.disconnect()
 asyncio.run(auth())
 PYEOF
-    )
+    ) | while IFS= read -r line; do
+        case "$line" in
+            QUALITY_SET*) echo -e "  ${C_GREEN}✅ Quality set to FLAC${C_RESET}" ;;
+            *) echo "$line" ;;
+        esac
+    done
     echo ""
     echo -e "  ${C_GREEN}Session saved. You won't need to do this again.${C_RESET}"
     echo ""
@@ -162,6 +168,9 @@ read_python_output() {
             \[*)
                 step=$(grep -oP '^\[\d/\d\]' <<< "$line" || true)
                 echo -e "  ${C_CYAN}${step}${C_RESET}${line#"$step"}"
+                ;;
+            QUALITY_SET*)
+                echo -e "  ${C_GREEN}✅ Quality set to FLAC${C_RESET}"
                 ;;
             ⏳*|🔄*)
                 echo -e "  ${C_CYAN}${line}${C_RESET}"
@@ -243,6 +252,7 @@ else
 
     echo ""
     echo -e "${C_CYAN}[2/4]${C_RESET} 📨 Requesting track from @deezload2bot..."
+    echo ""
 
     read_python_output "$PYTHON" "$PYTHON_HELPER" download "$SELECTION" "$OUTPUT_DIR"
 fi
@@ -266,15 +276,26 @@ tdl dl \
     > "$TDL_LOG" 2>&1 &
 TDL_PID=$!
 
+# Helper: find the file tdl is currently writing
+find_tdl_file() {
+    # First try exact expected filename
+    if [[ -f "$OUTPUT_DIR/$TDL_FILENAME" ]]; then
+        echo "$OUTPUT_DIR/$TDL_FILENAME"
+        return
+    fi
+    # Fall back: find newest file modified after tdl started
+    find "$OUTPUT_DIR" -maxdepth 1 \( -name "*.flac" -o -name "*.mp3" -o -name "*.tmp" \) \
+        -newer "$MARKER" 2>/dev/null | head -1
+}
+
 # Draw progress bar by polling the growing file on disk
-PARTIAL_FILE="$OUTPUT_DIR/$TDL_FILENAME"
 BAR_WIDTH=30
 while kill -0 "$TDL_PID" 2>/dev/null; do
-    if [[ -f "$PARTIAL_FILE" ]]; then
+    PARTIAL_FILE=$(find_tdl_file)
+    if [[ -n "$PARTIAL_FILE" ]]; then
         CUR=$(stat -c%s "$PARTIAL_FILE" 2>/dev/null || echo 0)
     else
-        NEWEST=$(find "$OUTPUT_DIR" -newer "$MARKER" \( -name "*.flac" -o -name "*.tmp" \) 2>/dev/null | head -1)
-        CUR=$(stat -c%s "$NEWEST" 2>/dev/null || echo 0)
+        CUR=0
     fi
 
     TOT="${TDL_FILESIZE:-0}"
@@ -316,8 +337,9 @@ rm -f "$TDL_LOG"
 # Locate the downloaded file — prefer the exact filename tdl was given
 SAVED_PATH="$OUTPUT_DIR/$TDL_FILENAME"
 if [[ ! -f "$SAVED_PATH" ]]; then
-    # Fallback: find newest flac created after our marker
-    SAVED_PATH=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*.flac" -cnewer "$MARKER" -print -quit)
+    # Fallback: find newest audio file created after our marker
+    SAVED_PATH=$(find "$OUTPUT_DIR" -maxdepth 1 \( -name "*.flac" -o -name "*.mp3" \) \
+        -cnewer "$MARKER" -print -quit)
 fi
 rm -f "$MARKER"
 

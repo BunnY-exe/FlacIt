@@ -131,7 +131,7 @@ async def ensure_flac_quality(client):
             return
 
         await asyncio.sleep(2)
-        print("\u2705 @deezload2bot quality set to FLAC", flush=True)
+        print("QUALITY_SET", flush=True)
 
     except Exception as e:
         eprint(f"\u26a0\ufe0f  Could not auto-configure FLAC quality: {e}")
@@ -370,11 +370,10 @@ if __name__ == "__main__":
     async def run():
         await client.start()
         try:
-            # Silently ensure FLAC quality on first run of each session
-            if mode in ("search", "link") and not os.path.exists(FLAC_QUALITY_FLAG):
-                import io, contextlib
-                with contextlib.redirect_stdout(io.StringIO()):
-                    await ensure_flac_quality(client)
+            # Ensure FLAC quality before download/link (stdout flows through
+            # read_python_output in the bash script, so signals are visible)
+            if mode in ("download", "link") and not os.path.exists(FLAC_QUALITY_FLAG):
+                await ensure_flac_quality(client)
                 open(FLAC_QUALITY_FLAG, "w").close()
 
             if mode == "search":

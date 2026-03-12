@@ -61,6 +61,83 @@ async def inline_query_with_retry(client, query):
 
 
 # ─────────────────────────────────────────────
+# Auto-configure bot quality to FLAC
+# ─────────────────────────────────────────────
+FLAC_QUALITY_FLAG = "/tmp/newsong_quality_ok"
+
+
+async def ensure_flac_quality(client):
+    """Send /settings to bot and navigate to FLAC quality. Non-fatal if it fails."""
+    try:
+        from telethon.tl.types import ReplyInlineMarkup
+
+        sent_at = datetime.now(timezone.utc)
+        await client.send_message(BOT, "/settings")
+
+        async def wait_for_keyboard(timeout=15):
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                async for msg in client.iter_messages(BOT, limit=5):
+                    if msg.date < sent_at:
+                        break
+                    if msg.out:
+                        continue
+                    if msg.reply_markup and isinstance(msg.reply_markup, ReplyInlineMarkup):
+                        return msg
+                await asyncio.sleep(1)
+            return None
+
+        # Step 1: wait for settings menu
+        settings_msg = await wait_for_keyboard(15)
+        if not settings_msg:
+            print("\u26a0\ufe0f  Could not reach @deezload2bot settings. Set quality to FLAC manually.", flush=True)
+            return
+
+        # Step 2: find and click "Audio Quality" button
+        clicked = False
+        for row in settings_msg.reply_markup.rows:
+            for btn in row.buttons:
+                if "quality" in btn.text.lower() or "audio" in btn.text.lower():
+                    sent_at = datetime.now(timezone.utc)
+                    await settings_msg.click(text=btn.text)
+                    clicked = True
+                    break
+            if clicked:
+                break
+
+        if not clicked:
+            print("\u26a0\ufe0f  Could not find Audio Quality button. Set quality to FLAC manually.", flush=True)
+            return
+
+        # Step 3: wait for quality submenu
+        quality_msg = await wait_for_keyboard(15)
+        if not quality_msg:
+            print("\u26a0\ufe0f  Quality submenu did not appear. Set quality to FLAC manually.", flush=True)
+            return
+
+        # Step 4: find and click "FLAC" button
+        clicked = False
+        for row in quality_msg.reply_markup.rows:
+            for btn in row.buttons:
+                if "flac" in btn.text.lower():
+                    await quality_msg.click(text=btn.text)
+                    clicked = True
+                    break
+            if clicked:
+                break
+
+        if not clicked:
+            print("\u26a0\ufe0f  FLAC option not found in quality menu. Set quality to FLAC manually.", flush=True)
+            return
+
+        await asyncio.sleep(2)
+        print("\u2705 @deezload2bot quality set to FLAC", flush=True)
+
+    except Exception as e:
+        eprint(f"\u26a0\ufe0f  Could not auto-configure FLAC quality: {e}")
+
+
+# ─────────────────────────────────────────────
 # Mode 1 — Search: inline_query, print tracks
 # ─────────────────────────────────────────────
 async def do_search(client, query):
@@ -293,6 +370,13 @@ if __name__ == "__main__":
     async def run():
         await client.start()
         try:
+            # Silently ensure FLAC quality on first run of each session
+            if mode in ("search", "link") and not os.path.exists(FLAC_QUALITY_FLAG):
+                import io, contextlib
+                with contextlib.redirect_stdout(io.StringIO()):
+                    await ensure_flac_quality(client)
+                open(FLAC_QUALITY_FLAG, "w").close()
+
             if mode == "search":
                 if len(sys.argv) < 3:
                     eprint(f"Usage: {sys.argv[0]} search <query>")

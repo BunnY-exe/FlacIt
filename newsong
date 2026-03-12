@@ -102,16 +102,27 @@ if [[ ! -f "$SESSION_FILE" ]]; then
     echo "  Enter your phone number with country code (e.g. +91XXXXXXXXXX)"
     echo ""
     "$PYTHON" - << 'PYEOF'
-import asyncio, os
+import asyncio, os, sys
+sys.path.insert(0, os.path.dirname(os.path.expanduser("~/newsong_dl.py")))
 from telethon import TelegramClient
 API_ID   = 2040
 API_HASH = "b18441a1ff607e10a989891a5462e627"
 SESSION  = os.path.expanduser("~/.newsong_session")
+
+# Import ensure_flac_quality from the helper
+import importlib.util
+spec = importlib.util.spec_from_file_location("newsong_dl", os.path.expanduser("~/newsong_dl.py"))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
 async def auth():
     client = TelegramClient(SESSION, API_ID, API_HASH)
     await client.start()
     me = await client.get_me()
     print(f"\n  ✅ Logged in as {me.first_name} (@{me.username})")
+    print(f"\n  ⚙️  Configuring @deezload2bot quality to FLAC...")
+    await mod.ensure_flac_quality(client)
+    open("/tmp/newsong_quality_ok", "w").close()
     await client.disconnect()
 asyncio.run(auth())
 PYEOF

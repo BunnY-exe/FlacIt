@@ -133,11 +133,13 @@ tdl login -d ~/.local/share/TelegramDesktop/tdata
 > ```
 > If neither path exists on your system, just run `tdl login` by itself — it will authenticate using a standard login code sent to your Telegram app.
 
-### Step 8 — ⚠️ Important: Interact with @deezload2bot once manually
+### Step 8 — ⚠️ Important: Start @deezload2bot once manually
 
 > ⚠️ **Before using FlacIt, you MUST open Telegram and start a conversation with @deezload2bot manually.**
 >
 > Search for `@deezload2bot` in Telegram, open the chat, and press **Start**. The bot will ask you to join their channel — **you must join it**. This is a one-time step. If you skip this, FlacIt will time out waiting for a response and nothing will download.
+>
+> You **don't** need to change the quality setting manually — FlacIt automatically configures @deezload2bot to send FLAC files on first run.
 
 ### Step 9 — First run (Telegram auth)
 

@@ -58,7 +58,7 @@ check_deps() {
     fi
     if ! command -v tdl &>/dev/null; then
         echo -e "${C_RED}✗ tdl not installed.${C_RESET}" >&2
-        echo -e "  Run: ${C_BOLD}curl -sSL https://get.tdl.sh | sh${C_RESET}" >&2
+        echo -e "  Run: ${C_BOLD}curl -sSL https://docs.iyear.me/tdl/install.sh | sudo bash${C_RESET}" >&2
         missing=1
     fi
     if [[ ! -f "$PYTHON_HELPER" ]]; then

@@ -65,11 +65,8 @@ sudo apt install python3 python3-pip git -y
 tdl is a command-line tool that downloads files from Telegram using parallel connections — much faster than downloading one chunk at a time.
 
 ```bash
-# Download and run the tdl installer script
-curl -sSL https://get.tdl.sh | sh
-
-# Restart your terminal OR run this to load tdl into your current session
-source ~/.bashrc
+# Download and install the tdl binary
+curl -sSL https://docs.iyear.me/tdl/install.sh | sudo bash
 ```
 
 ### Step 3 — Install Telethon (Python library for Telegram)
@@ -123,12 +120,18 @@ source ~/.bashrc
 
 ### Step 7 — Log in to tdl
 
+The fastest way is to copy your existing Telegram Desktop session:
+
 ```bash
-# This logs tdl into your Telegram account (one-time setup)
-tdl login
+# Point tdl to your Telegram Desktop data directory (one-time setup)
+tdl login -d ~/.local/share/TelegramDesktop/tdata
 ```
 
-Follow the prompts — it will ask for your phone number and a confirmation code sent to your Telegram app.
+> **Note:** If Telegram was installed via Flatpak, use this path instead:
+> ```bash
+> tdl login -d ~/.var/app/org.telegram.desktop/data/TelegramDesktop/tdata
+> ```
+> If neither path exists on your system, just run `tdl login` by itself — it will authenticate using a standard login code sent to your Telegram app.
 
 ### Step 8 — ⚠️ Important: Interact with @deezload2bot once manually
 

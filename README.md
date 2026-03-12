@@ -1,10 +1,12 @@
-```
-    _____ _            ___ _
-   |  ___| | __ _  ___|_ _| |_
-   | |_  | |/ _` |/ __|| || __|
-   |  _| | | (_| | (__ | || |_
-   |_|   |_|\__,_|\___|___|\__|
-```
+<div align="center">
+
+<pre>
+_______________            ____________ 
+___  ____/__  /_____ __________  _/_  /_
+__  /_   __  /_  __ `/  ___/__  / _  __/
+_  __/   _  / / /_/ // /__ __/ /  / /_  
+/_/      /_/  \__,_/ \___/ /___/  \__/  
+</pre>
 
 **Search any song from your terminal. Get a FLAC. No accounts. No nonsense.**
 
@@ -12,6 +14,9 @@
 ![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?logo=gnubash&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 ![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange?logo=linux&logoColor=white)
+![Downloads](https://img.shields.io/github/downloads/BunnY-exe/FlacIt/total?color=brightgreen&label=downloads)
+
+</div>
 
 ---
 
@@ -27,24 +32,24 @@ No Spotify Premium. No broken third-party APIs. No rate limits to dance around. 
 
 ## Features
 
-- 🔍 **Smart search** — powered by @deezload2bot's inline query, returns up to 10 results instantly
-- 🎯 **Pick your version** — choose exactly which artist/album version you want
-- ⚡ **Fast downloads** — uses `tdl` for parallel chunk downloading, not slow single-stream
-- 🔗 **Direct link mode** — already have a Spotify or Deezer link? Use `newsong -l "https://..."` to skip search entirely
-- 📁 **Clean filenames** — saves as `Artist - Song.flac` directly to your music folder
-- 🔒 **Zero API keys** — no Spotify account, no developer portal, nothing to register
-- 🖥️ **Beautiful terminal UI** — live progress bar, braille spinner, colored output
+```
+→ Smart search via @deezload2bot inline query — up to 10 results instantly
+→ Pick the exact version you want — artist, album, remaster, whatever
+→ Fast parallel downloads via tdl — not slow single-stream
+→ Direct link mode — newsong -l "spotify/deezer url" skips search entirely
+→ Clean filenames — saved as Artist - Song.flac
+→ Zero config — no API keys, no accounts, nothing to register
+→ Minimal terminal UI — progress bar, spinner, color
+```
 
 ---
 
 ## Requirements
 
-- **Linux** (tested on Ubuntu/Debian)
+- **Linux** (tested on Ubuntu / Debian / Kali)
 - **Python 3.8+**
-- **pip** (Python package manager)
-- **tdl** (Telegram Downloader CLI)
 - **A Telegram account** (free)
-- **git** (to clone)
+- **tdl** — installed in Step 2
 
 ---
 
@@ -53,42 +58,37 @@ No Spotify Premium. No broken third-party APIs. No rate limits to dance around. 
 ### Step 1 — Install system dependencies
 
 ```bash
-# Update your package list so apt knows about the latest versions
+# Update your package list
 sudo apt update
 
-# Install Python 3 and pip (Python's package manager) if you don't have them
-sudo apt install python3 python3-pip git -y
+# Install Python 3 if you don't have it
+sudo apt install python3 python3-pip -y
 ```
 
-### Step 2 — Install tdl (the fast Telegram downloader)
+### Step 2 — Install tdl
 
 tdl is a command-line tool that downloads files from Telegram using parallel connections — much faster than downloading one chunk at a time.
 
 ```bash
-# Download and install the tdl binary
 curl -sSL https://docs.iyear.me/tdl/install.sh | sudo bash
 ```
 
-### Step 3 — Install Telethon (Python library for Telegram)
+### Step 3 — Install Telethon
 
 ```bash
-# Install the Telethon library — this lets FlacIt talk to Telegram on your behalf
 pip install telethon --break-system-packages
 ```
 
 ### Step 4 — Clone FlacIt
 
 ```bash
-# Download the FlacIt project to your computer
 git clone https://github.com/BunnY-exe/FlacIt.git
-
-# Go into the project folder
 cd FlacIt
 ```
 
 ### Step 5 — Set your music folder
 
-Open `newsong` in any text editor you have — nano, gedit, mousepad, whatever works. Find this line near the top:
+Open `newsong` in any text editor. Find this line near the top:
 
 ```bash
 OUTPUT_DIR="$HOME/off-music"
@@ -96,26 +96,32 @@ OUTPUT_DIR="$HOME/off-music"
 
 Change `off-music` to whatever folder name you want your FLACs saved in. For example `Music`, `FLAC`, or just leave it as `off-music`. The folder will be created automatically the first time you download something.
 
-### Step 6 — Install FlacIt
+### Step 6a — Put the script on your PATH
 
 ```bash
-# Create the local bin folder if it doesn't exist (this is where user scripts live)
+# Create the folder where user scripts live (if it doesn't exist)
 mkdir -p ~/.local/bin
 
-# Copy the main script to that folder
+# Copy the scripts into place
 cp newsong ~/.local/bin/newsong
-
-# Make it executable (so Linux lets you run it)
-chmod +x ~/.local/bin/newsong
-
-# Copy the Python helper to your home folder
 cp newsong_dl.py ~/newsong_dl.py
 
-# Add ~/.local/bin to your PATH so you can run 'newsong' from anywhere
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+# Make the main script executable
+chmod +x ~/.local/bin/newsong
+```
 
-# Reload your shell config to apply the PATH change immediately
+### Step 6b — Add it to your PATH
+
+> If you're on Kali Linux or using zsh, replace `~/.bashrc` with `~/.zshrc` below.
+
+```bash
+# For bash users (Ubuntu, Debian):
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
+
+# For zsh users (Kali Linux):
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
 ```
 
 ### Step 7 — Log in to tdl
@@ -123,7 +129,6 @@ source ~/.bashrc
 The fastest way is to copy your existing Telegram Desktop session:
 
 ```bash
-# Point tdl to your Telegram Desktop data directory (one-time setup)
 tdl login -d ~/.local/share/TelegramDesktop/tdata
 ```
 
@@ -133,32 +138,26 @@ tdl login -d ~/.local/share/TelegramDesktop/tdata
 > ```
 > If neither path exists on your system, just run `tdl login` by itself — it will authenticate using a standard login code sent to your Telegram app.
 
-### Step 8 — ⚠️ Important: Start @deezload2bot once manually
+### Step 8 — Start @deezload2bot once manually
 
-> ⚠️ **Before using FlacIt, you MUST open Telegram and start a conversation with @deezload2bot manually.**
->
-> Search for `@deezload2bot` in Telegram, open the chat, and press **Start**. The bot will ask you to join their channel — **you must join it**. This is a one-time step. If you skip this, FlacIt will time out waiting for a response and nothing will download.
->
-> You **don't** need to change the quality setting manually — FlacIt automatically configures @deezload2bot to send FLAC files on first run.
+Before using FlacIt, you need to open Telegram and start a conversation with `@deezload2bot` manually. Search for it, open the chat, and press **Start**. The bot will ask you to join their channel — you must join it. This is a one-time step. If you skip this, FlacIt will time out waiting for a response and nothing will download.
 
-### Step 9 — First run (Telegram auth)
+You don't need to change the quality setting manually — FlacIt automatically configures @deezload2bot to send FLAC files on first run.
 
-> ⚠️ **This step is separate from `tdl login`.** The `tdl login` command only authenticates `tdl` (used for fast file downloads). FlacIt also uses **Telethon** for searching and interacting with @deezload2bot — and Telethon needs its own session.
+### Step 9 — First run
 
-Run the Python helper directly to create the Telethon session:
-
-```bash
-# Authenticate Telethon (one-time setup)
-python3 ~/newsong_dl.py search test
-```
-
-This will ask for your **phone number** and a **login code** sent to your Telegram app. Enter both when prompted. Your session is saved to `~/.newsong_session.session` and never expires.
-
-After this, `newsong` will work normally:
+Just run it:
 
 ```bash
 newsong "test"
 ```
+
+If this is your first time, FlacIt will ask for your **Telegram phone number** and a **login code** sent to your app. Enter both. Your session is saved permanently — you'll never be asked again.
+
+> If you'd prefer to authenticate before running a real search, you can also run:
+> ```bash
+> python3 ~/newsong_dl.py search test
+> ```
 
 ---
 
@@ -183,13 +182,13 @@ Sometimes the inline search returns the wrong version — a remix, a live record
 
 ---
 
-## ⏳ Note on Download Speed
+## A Note on Speed
 
 > After you confirm your selection and the download begins, **tdl may take 30–60 seconds before the progress bar starts moving**. This is normal — tdl is negotiating the download from Telegram's servers. Don't close the terminal. Just wait. Once it starts, it's fast.
 
 ---
 
-## How It Works (Technical)
+## How It Works
 
 For the curious — here's the full pipeline:
 

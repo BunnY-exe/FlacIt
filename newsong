@@ -68,6 +68,15 @@ check_deps() {
     if (( missing )); then
         exit 1
     fi
+
+    # Check Telethon session — if missing, guide the user to log in
+    if [[ ! -f "$HOME/.newsong_session.session" ]]; then
+        echo -e "${C_RED}✗ Telegram session not found.${C_RESET}" >&2
+        echo -e "  You need to log in to Telethon first (one-time setup)." >&2
+        echo -e "  Run: ${C_BOLD}$PYTHON $PYTHON_HELPER search test${C_RESET}" >&2
+        echo -e "  It will ask for your phone number and a Telegram login code." >&2
+        exit 1
+    fi
 }
 
 # ─── Argument parsing ──────────────────────────

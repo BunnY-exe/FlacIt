@@ -280,6 +280,20 @@ if __name__ == "__main__":
         sys.exit(1)
 
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    # Check if Telethon session exists — if not, guide the user instead of
+    # hanging silently (the interactive prompt gets swallowed by the bash
+    # script's command substitution).
+    if not os.path.exists(SESSION + ".session"):
+        eprint("❌ Telegram session not found. You need to log in first.")
+        eprint("")
+        eprint("Run this once to authenticate:")
+        eprint(f"  python3 {os.path.abspath(__file__)} search test")
+        eprint("")
+        eprint("It will ask for your phone number and a code sent to your Telegram app.")
+        eprint("After that, newsong will work normally.")
+        sys.exit(1)
+
     client = TelegramClient(SESSION, API_ID, API_HASH)
 
     async def run():

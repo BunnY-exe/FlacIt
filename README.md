@@ -141,12 +141,22 @@ tdl login -d ~/.local/share/TelegramDesktop/tdata
 
 ### Step 9 — First run (Telegram auth)
 
+> ⚠️ **This step is separate from `tdl login`.** The `tdl login` command only authenticates `tdl` (used for fast file downloads). FlacIt also uses **Telethon** for searching and interacting with @deezload2bot — and Telethon needs its own session.
+
+Run the Python helper directly to create the Telethon session:
+
 ```bash
-# Run FlacIt for the first time — it will ask for your Telegram phone number
-newsong "test"
+# Authenticate Telethon (one-time setup)
+python3 ~/newsong_dl.py search test
 ```
 
-The first time you run it, Telethon will ask for your phone number and send a login code to your Telegram app. Enter it when prompted. This only happens once — your session is saved permanently after that.
+This will ask for your **phone number** and a **login code** sent to your Telegram app. Enter both when prompted. Your session is saved to `~/.newsong_session.session` and never expires.
+
+After this, `newsong` will work normally:
+
+```bash
+newsong "test"
+```
 
 ---
 
@@ -196,6 +206,7 @@ For the curious — here's the full pipeline:
 | Problem | Fix |
 |---|---|
 | `command not found: newsong` | Run `source ~/.bashrc` or open a new terminal |
+| Stuck at "Searching for..." (hangs) | Telethon session missing — run `python3 ~/newsong_dl.py search test` to log in first |
 | Stuck at "Waiting for @deezload2bot..." | Open Telegram, find @deezload2bot, press Start and join their channel |
 | Progress bar doesn't move for a minute | Normal — wait 30–60s for tdl to start |
 | `BotResponseTimeoutError` | Bot is busy, FlacIt retries automatically up to 3 times |

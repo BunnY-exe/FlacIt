@@ -206,7 +206,8 @@ For the curious — here's the full pipeline:
 | Problem | Fix |
 |---|---|
 | `command not found: newsong` | Run `source ~/.bashrc` or open a new terminal |
-| Stuck at "Searching for..." (hangs) | Telethon session missing — run `python3 ~/newsong_dl.py search test` to log in first |
+| First run shows spinner with no prompt | Run `python3 ~/newsong_dl.py search "test"` directly to complete auth, then retry |
+| Stuck at "Searching for..." (hangs) | Telethon session missing — update to latest version which handles first-run auth automatically |
 | Stuck at "Waiting for @deezload2bot..." | Open Telegram, find @deezload2bot, press Start and join their channel |
 | Progress bar doesn't move for a minute | Normal — wait 30–60s for tdl to start |
 | `BotResponseTimeoutError` | Bot is busy, FlacIt retries automatically up to 3 times |

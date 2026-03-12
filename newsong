@@ -68,15 +68,6 @@ check_deps() {
     if (( missing )); then
         exit 1
     fi
-
-    # Check Telethon session — if missing, guide the user to log in
-    if [[ ! -f "$HOME/.newsong_session.session" ]]; then
-        echo -e "${C_RED}✗ Telegram session not found.${C_RESET}" >&2
-        echo -e "  You need to log in to Telethon first (one-time setup)." >&2
-        echo -e "  Run: ${C_BOLD}$PYTHON $PYTHON_HELPER search test${C_RESET}" >&2
-        echo -e "  It will ask for your phone number and a Telegram login code." >&2
-        exit 1
-    fi
 }
 
 # ─── Argument parsing ──────────────────────────
@@ -93,8 +84,41 @@ fi
 
 [[ $# -eq 0 ]] && { echo "Usage: newsong <song name>"; echo "       newsong -l <track_url>"; exit 1; }
 
+# Guard against empty query / empty link
+if [[ "$LINK_MODE" == false ]]; then
+    QUERY_CHECK="$*"
+    [[ -z "${QUERY_CHECK// /}" ]] && die "❌ Please provide a song name. Usage: newsong \"song name\""
+fi
+
 check_deps
 mkdir -p "$OUTPUT_DIR"
+
+# ─── First-run: interactive Telethon auth (before any spinner) ───
+SESSION_FILE="$HOME/.newsong_session.session"
+if [[ ! -f "$SESSION_FILE" ]]; then
+    echo -e "\n${C_CYAN}♫ First run — Telegram login required${C_RESET}"
+    echo ""
+    echo "  Telethon needs to verify your Telegram account once."
+    echo "  Enter your phone number with country code (e.g. +91XXXXXXXXXX)"
+    echo ""
+    "$PYTHON" - << 'PYEOF'
+import asyncio, os
+from telethon import TelegramClient
+API_ID   = 2040
+API_HASH = "b18441a1ff607e10a989891a5462e627"
+SESSION  = os.path.expanduser("~/.newsong_session")
+async def auth():
+    client = TelegramClient(SESSION, API_ID, API_HASH)
+    await client.start()
+    me = await client.get_me()
+    print(f"\n  ✅ Logged in as {me.first_name} (@{me.username})")
+    await client.disconnect()
+asyncio.run(auth())
+PYEOF
+    echo ""
+    echo -e "  ${C_GREEN}Session saved. You won't need to do this again.${C_RESET}"
+    echo ""
+fi
 
 echo -e "\n${C_CYAN}♫ newsong${C_RESET}\n"
 
@@ -277,9 +301,12 @@ SUMMARY=$(grep -oP '\[.*done.*\]' "$TDL_LOG" | tail -1 || true)
 echo -e "  ${C_CYAN}${DL_STEP}${C_RESET} 📥 ${C_GREEN}✓${C_RESET} ${TDL_FILENAME}  ${C_GRAY}${SUMMARY}${C_RESET}"
 rm -f "$TDL_LOG"
 
-# Find the file tdl just created (use -cnewer for inode change time,
-# since tdl preserves the original mtime from Telegram)
-SAVED_PATH=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*.flac" -cnewer "$MARKER" -print -quit)
+# Locate the downloaded file — prefer the exact filename tdl was given
+SAVED_PATH="$OUTPUT_DIR/$TDL_FILENAME"
+if [[ ! -f "$SAVED_PATH" ]]; then
+    # Fallback: find newest flac created after our marker
+    SAVED_PATH=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*.flac" -cnewer "$MARKER" -print -quit)
+fi
 rm -f "$MARKER"
 
 if [[ -z "$SAVED_PATH" || ! -f "$SAVED_PATH" ]]; then

@@ -67,38 +67,50 @@ FLAC_QUALITY_FLAG = os.path.expanduser("~/.newsong_flac_set")
 
 
 async def ensure_flac_quality(client):
-    """Send /settings to bot and navigate to FLAC quality. Non-fatal if it fails."""
+    """Navigate /settings to set @deezload2bot quality to FLAC.
+
+    Confirmed bot behavior:
+    - /settings sends a NEW message with Audio Quality / Naming Format / X
+    - Clicking Audio Quality EDITS that same message (same ID) with FLAC/MP3 options
+    - Must re-fetch the message by ID after clicking, not wait for a new one
+    - Use ID-based filtering (msg.id > last_id), NOT date-based (Telegram timestamps
+      are whole seconds and will match datetime.now() which has microseconds)
+    """
     try:
         from telethon.tl.types import ReplyInlineMarkup
 
-        sent_at = datetime.now(timezone.utc)
+        # Record last message ID before sending anything
+        last_id = 0
+        async for msg in client.iter_messages(BOT, limit=1):
+            last_id = msg.id
+
         await client.send_message(BOT, "/settings")
 
-        async def wait_for_keyboard(timeout=15):
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                async for msg in client.iter_messages(BOT, limit=5):
-                    if msg.date < sent_at:
-                        break
-                    if msg.out:
-                        continue
-                    if msg.reply_markup and isinstance(msg.reply_markup, ReplyInlineMarkup):
-                        return msg
-                await asyncio.sleep(1)
-            return None
+        # Step 1: wait for new settings message (ID > last_id)
+        settings_msg = None
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            async for msg in client.iter_messages(BOT, limit=5):
+                if msg.id <= last_id:
+                    break
+                if msg.out:
+                    continue
+                if msg.reply_markup and isinstance(msg.reply_markup, ReplyInlineMarkup):
+                    settings_msg = msg
+                    break
+            if settings_msg:
+                break
+            await asyncio.sleep(1)
 
-        # Step 1: wait for settings menu
-        settings_msg = await wait_for_keyboard(15)
         if not settings_msg:
             print("\u26a0\ufe0f  Could not reach @deezload2bot settings. Set quality to FLAC manually.", flush=True)
             return
 
-        # Step 2: find and click "Audio Quality" button
+        # Step 2: click Audio Quality button (match by text, case-insensitive)
         clicked = False
         for row in settings_msg.reply_markup.rows:
             for btn in row.buttons:
                 if "quality" in btn.text.lower() or "audio" in btn.text.lower():
-                    sent_at = datetime.now(timezone.utc)
                     await settings_msg.click(text=btn.text)
                     clicked = True
                     break
@@ -106,16 +118,19 @@ async def ensure_flac_quality(client):
                 break
 
         if not clicked:
-            print("\u26a0\ufe0f  Could not find Audio Quality button. Set quality to FLAC manually.", flush=True)
+            print("\u26a0\ufe0f  Audio Quality button not found. Set quality to FLAC manually.", flush=True)
             return
 
-        # Step 3: wait for quality submenu
-        quality_msg = await wait_for_keyboard(15)
-        if not quality_msg:
+        # Step 3: bot EDITS the same message in place with the quality submenu.
+        # Re-fetch by ID after waiting 3s for the edit to arrive.
+        await asyncio.sleep(3)
+        quality_msg = (await client.get_messages(BOT, ids=[settings_msg.id]))[0]
+
+        if not quality_msg or not quality_msg.reply_markup:
             print("\u26a0\ufe0f  Quality submenu did not appear. Set quality to FLAC manually.", flush=True)
             return
 
-        # Step 4: find and click "FLAC" button
+        # Step 4: click FLAC button
         clicked = False
         for row in quality_msg.reply_markup.rows:
             for btn in row.buttons:
@@ -127,12 +142,11 @@ async def ensure_flac_quality(client):
                 break
 
         if not clicked:
-            print("\u26a0\ufe0f  FLAC option not found in quality menu. Set quality to FLAC manually.", flush=True)
+            print("\u26a0\ufe0f  FLAC option not found. Set quality to FLAC manually in @deezload2bot.", flush=True)
             return
 
         await asyncio.sleep(2)
         print("QUALITY_SET", flush=True)
-        # Persist flag only after confirmed success
         open(FLAC_QUALITY_FLAG, "w").close()
 
     except Exception as e:

@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ═══════════════════════════════════════════════
+#  newsong — download FLAC via Telegram bot
+#  Uses inline_query → click → FLAC download
+# ═══════════════════════════════════════════════
+
+PYTHON=/usr/bin/python3
+OUTPUT_DIR="$HOME/off-music"
+PYTHON_HELPER="$HOME/newsong_dl.py"
+
+# ─── Colors & Spinner ─────────────────────────
+C_RESET='\033[0m'
+C_BOLD='\033[1m'
+C_RED='\033[31m'
+C_GREEN='\033[32m'
+C_CYAN='\033[36m'
+C_GRAY='\033[90m'
+C_BOLD_WHITE='\033[1;37m'
+SPIN_FRAMES=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+SPINNER_PID=""
+
+die() { echo -e "${C_RED}$1${C_RESET}" >&2; exit 1; }
+
+start_spinner() {
+    local msg="$1"
+    (
+        i=0
+        while true; do
+            printf "\r  ${C_CYAN}%s${C_RESET} %s" "${SPIN_FRAMES[$((i % ${#SPIN_FRAMES[@]}))]}" "$msg"
+            sleep 0.1
+            ((++i))
+        done
+    ) &
+    SPINNER_PID=$!
+    disown "$SPINNER_PID"
+}
+
+stop_spinner() {
+    if [[ -n "${SPINNER_PID:-}" ]]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
+        wait "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=""
+        printf "\r\033[K"
+    fi
+}
+
+check_deps() {
+    local missing=0
+    if ! command -v "$PYTHON" &>/dev/null; then
+        echo -e "${C_RED}✗ Python3 not found at $PYTHON${C_RESET}" >&2
+        missing=1
+    elif ! "$PYTHON" -c "import telethon" 2>/dev/null; then
+        echo -e "${C_RED}✗ telethon not installed.${C_RESET}" >&2
+        echo -e "  Run: ${C_BOLD}$PYTHON -m pip install telethon --break-system-packages${C_RESET}" >&2
+        missing=1
+    fi
+    if ! command -v tdl &>/dev/null; then
+        echo -e "${C_RED}✗ tdl not installed.${C_RESET}" >&2
+        echo -e "  Run: ${C_BOLD}curl -sSL https://get.tdl.sh | sh${C_RESET}" >&2
+        missing=1
+    fi
+    if [[ ! -f "$PYTHON_HELPER" ]]; then
+        echo -e "${C_RED}✗ Helper not found: $PYTHON_HELPER${C_RESET}" >&2
+        missing=1
+    fi
+    if (( missing )); then
+        exit 1
+    fi
+}
+
+# ─── Argument parsing ──────────────────────────
+
+LINK_MODE=false
+DIRECT_LINK=""
+
+if [[ "${1:-}" == "-l" ]]; then
+    shift
+    DIRECT_LINK="${1:-}"
+    [[ -z "$DIRECT_LINK" ]] && die "❌ Usage: newsong -l <track_url>"
+    LINK_MODE=true
+fi
+
+[[ $# -eq 0 ]] && { echo "Usage: newsong <song name>"; echo "       newsong -l <track_url>"; exit 1; }
+
+check_deps
+mkdir -p "$OUTPUT_DIR"
+
+echo -e "\n${C_CYAN}♫ newsong${C_RESET}\n"
+
+PY_ERR=$(mktemp)
+trap 'stop_spinner; rm -f "$PY_ERR" /tmp/newsong_tdl_out' EXIT
+
+# ── Helper: read Python stdout for TDL lines ──
+read_python_output() {
+    TDL_MSGID=""
+    TDL_FILENAME=""
+    PYTHON_EXIT=1
+    exec 3< <("$@" 2>"$PY_ERR"; echo "EXIT:$?")
+
+    while IFS= read -r line <&3; do
+        case "$line" in
+            EXIT:*)
+                PYTHON_EXIT="${line#EXIT:}"
+                break
+                ;;
+            TDL_MSGID:*)
+                TDL_MSGID="${line#TDL_MSGID:}"
+                ;;
+            TDL_FILENAME:*)
+                TDL_FILENAME="${line#TDL_FILENAME:}"
+                ;;
+            TDL_FILESIZE:*)
+                TDL_FILESIZE="${line#TDL_FILESIZE:}"
+                ;;
+            \[*)
+                step=$(grep -oP '^\[\d/\d\]' <<< "$line" || true)
+                echo -e "  ${C_CYAN}${step}${C_RESET}${line#"$step"}"
+                ;;
+            ⏳*|🔄*)
+                echo -e "  ${C_CYAN}${line}${C_RESET}"
+                ;;
+            *)
+                if [[ -n "$line" ]]; then echo "  $line"; fi
+                ;;
+        esac
+    done
+    exec 3<&-
+
+    if [[ "${PYTHON_EXIT}" -ne 0 ]]; then
+        echo ""
+        [[ -s "$PY_ERR" ]] && echo -e "${C_RED}$(cat "$PY_ERR")${C_RESET}" >&2
+        die "❌ Download failed."
+    fi
+    if [[ -z "$TDL_MSGID" ]]; then
+        die "❌ Could not get message ID for download."
+    fi
+}
+
+if [[ "$LINK_MODE" == true ]]; then
+    # ── Link mode ──────────────────────────────
+    echo -e "  🔗 Link: ${C_BOLD}${DIRECT_LINK}${C_RESET}"
+    echo ""
+    read -rp "  Send to @deezload2bot and download? [Y/n]: " confirm
+    confirm="${confirm:-Y}"
+    [[ "$confirm" =~ ^[nN]$ ]] && { echo -e "${C_RED}❌ Discarded.${C_RESET}"; exit 0; }
+
+    echo ""
+    echo -e "${C_CYAN}[1/2]${C_RESET} 📨 Sending link to @deezload2bot..."
+
+    read_python_output "$PYTHON" "$PYTHON_HELPER" link "$DIRECT_LINK"
+else
+    # ── Search mode ────────────────────────────
+    QUERY="$*"
+
+    start_spinner "[1/4] 🔍 Searching for: \"$QUERY\"..."
+
+    SEARCH_OUT=$("$PYTHON" "$PYTHON_HELPER" search "$QUERY" 2>"$PY_ERR") || {
+        stop_spinner
+        die "$(cat "$PY_ERR")"
+    }
+    stop_spinner
+
+    # Parse TRACK: lines
+    mapfile -t TRACK_LINES < <(echo "$SEARCH_OUT" | grep '^TRACK:')
+    NUM=${#TRACK_LINES[@]}
+    [[ $NUM -eq 0 ]] && die "❌ No results found for \"$QUERY\""
+
+    echo -e "${C_CYAN}[1/4]${C_RESET} Found ${C_GREEN}${NUM}${C_RESET} result(s):\n"
+    for line in "${TRACK_LINES[@]}"; do
+        n=$(cut -d: -f2 <<< "$line")
+        display=$(cut -d: -f3- <<< "$line")
+        printf "    ${C_BOLD}%s.${C_RESET} %s\n" "$n" "$display"
+    done
+    echo ""
+
+    # Selection
+    SELECTION=1
+    if [[ $NUM -gt 1 ]]; then
+        while true; do
+            read -rp "  Enter number (1-${NUM}): " choice
+            [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= NUM )) && {
+                SELECTION=$choice; break
+            }
+            echo "  Invalid. Enter 1–${NUM}."
+        done
+    fi
+
+    SELECTED_DISPLAY=$(cut -d: -f3- <<< "${TRACK_LINES[$((SELECTION-1))]}")
+    echo -e "\n  ${C_GREEN}✅ Selected:${C_RESET} ${SELECTED_DISPLAY}"
+
+    # Confirmation
+    echo ""
+    read -rp "  Proceed with download? [Y/n]: " confirm
+    confirm="${confirm:-Y}"
+    [[ "$confirm" =~ ^[nN]$ ]] && { echo -e "${C_RED}❌ Discarded.${C_RESET}"; exit 0; }
+
+    echo ""
+    echo -e "${C_CYAN}[2/4]${C_RESET} 📨 Requesting track from @deezload2bot..."
+
+    read_python_output "$PYTHON" "$PYTHON_HELPER" download "$SELECTION" "$OUTPUT_DIR"
+fi
+
+# ── Fast download via tdl ──────────────────────
+if [[ "$LINK_MODE" == true ]]; then
+    DL_STEP="[2/2]"
+else
+    DL_STEP="[4/4]"
+fi
+
+# Timestamp marker so we can find exactly which file tdl creates
+MARKER=$(mktemp)
+TDL_LOG=$(mktemp)
+
+# Run tdl silently in background
+tdl dl \
+    -u "https://t.me/deezload2bot/${TDL_MSGID}" \
+    -d "$OUTPUT_DIR" \
+    --template "{{ filenamify .FileName }}" \
+    > "$TDL_LOG" 2>&1 &
+TDL_PID=$!
+
+# Draw progress bar by polling the growing file on disk
+PARTIAL_FILE="$OUTPUT_DIR/$TDL_FILENAME"
+BAR_WIDTH=30
+while kill -0 "$TDL_PID" 2>/dev/null; do
+    if [[ -f "$PARTIAL_FILE" ]]; then
+        CUR=$(stat -c%s "$PARTIAL_FILE" 2>/dev/null || echo 0)
+    else
+        NEWEST=$(find "$OUTPUT_DIR" -newer "$MARKER" \( -name "*.flac" -o -name "*.tmp" \) 2>/dev/null | head -1)
+        CUR=$(stat -c%s "$NEWEST" 2>/dev/null || echo 0)
+    fi
+
+    TOT="${TDL_FILESIZE:-0}"
+    PCT=0
+    if (( TOT > 0 )); then
+        PCT=$(awk "BEGIN { printf \"%d\", ($CUR / $TOT) * 100 }")
+    fi
+    FILLED=$(( PCT * BAR_WIDTH / 100 ))
+    EMPTY=$(( BAR_WIDTH - FILLED ))
+
+    BAR_F=""; BAR_E=""
+    for ((j=0; j<FILLED; j++)); do BAR_F+="█"; done
+    for ((j=0; j<EMPTY;  j++)); do BAR_E+="░"; done
+
+    MB_CUR=$(awk "BEGIN { printf \"%.1f\", $CUR  / 1048576 }")
+    MB_TOT=$(awk "BEGIN { printf \"%.1f\", $TOT  / 1048576 }")
+
+    printf "\r  ${C_CYAN}${DL_STEP} 📥 Downloading${C_RESET}  ${C_GREEN}%b${C_RESET}${C_GRAY}%b${C_RESET}  ${C_BOLD_WHITE}%3d%%${C_RESET}  (%s / %s MB)" \
+        "$BAR_F" "$BAR_E" "$PCT" "$MB_CUR" "$MB_TOT"
+
+    sleep 1
+done
+
+# Clear the progress line and collect exit code
+printf "\r\033[K"
+wait "$TDL_PID"; TDL_EXIT=$?
+
+[[ $TDL_EXIT -ne 0 ]] && {
+    cat "$TDL_LOG" >&2
+    rm -f "$TDL_LOG"
+    die "❌ tdl download failed."
+}
+
+# Extract speed summary from tdl output
+SUMMARY=$(grep -oP '\[.*done.*\]' "$TDL_LOG" | tail -1 || true)
+echo -e "  ${C_CYAN}${DL_STEP}${C_RESET} 📥 ${C_GREEN}✓${C_RESET} ${TDL_FILENAME}  ${C_GRAY}${SUMMARY}${C_RESET}"
+rm -f "$TDL_LOG"
+
+# Find the file tdl just created (use -cnewer for inode change time,
+# since tdl preserves the original mtime from Telegram)
+SAVED_PATH=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*.flac" -cnewer "$MARKER" -print -quit)
+rm -f "$MARKER"
+
+if [[ -z "$SAVED_PATH" || ! -f "$SAVED_PATH" ]]; then
+    die "❌ File not saved correctly."
+fi
+
+# ── Done ───────────────────────────────────────
+
+echo ""
+echo -e "${C_CYAN}${DL_STEP}${C_RESET} ${C_GREEN}✅ Done!${C_RESET}"
+printf '\n  🎵 Saved to: %b%s%b\n\n' "${C_BOLD}" "${SAVED_PATH}" "${C_RESET}"
+echo -e "  ╔══════════════════════════════════════╗"
+echo -e "  ║  ${C_GREEN}newsong complete. Enjoy the music!${C_RESET}  ║"
+echo -e "  ╚══════════════════════════════════════╝\n"

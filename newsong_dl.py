@@ -389,6 +389,7 @@ if __name__ == "__main__":
             # Ensure FLAC quality before download/link (stdout flows through
             # read_python_output in the bash script, so signals are visible)
             if mode in ("download", "link") and not os.path.exists(FLAC_QUALITY_FLAG):
+                print("⚙️  Setting @deezload2bot quality to FLAC (one-time)...", flush=True)
                 await ensure_flac_quality(client)
 
             if mode == "search":

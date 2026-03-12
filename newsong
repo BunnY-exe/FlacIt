@@ -101,10 +101,10 @@ if [[ ! -f "$SESSION_FILE" ]]; then
     echo "  Telethon needs to verify your Telegram account once."
     echo "  Enter your phone number with country code (e.g. +91XXXXXXXXXX)"
     echo ""
-    "$PYTHON" - << 'PYEOF'
+    "$PYTHON" <(cat << 'PYEOF'
 import asyncio, os, sys
-sys.path.insert(0, os.path.dirname(os.path.expanduser("~/newsong_dl.py")))
 from telethon import TelegramClient
+
 API_ID   = 2040
 API_HASH = "b18441a1ff607e10a989891a5462e627"
 SESSION  = os.path.expanduser("~/.newsong_session")
@@ -126,6 +126,7 @@ async def auth():
     await client.disconnect()
 asyncio.run(auth())
 PYEOF
+    )
     echo ""
     echo -e "  ${C_GREEN}Session saved. You won't need to do this again.${C_RESET}"
     echo ""

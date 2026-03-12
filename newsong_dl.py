@@ -63,7 +63,7 @@ async def inline_query_with_retry(client, query):
 # ─────────────────────────────────────────────
 # Auto-configure bot quality to FLAC
 # ─────────────────────────────────────────────
-FLAC_QUALITY_FLAG = "/tmp/newsong_quality_ok"
+FLAC_QUALITY_FLAG = os.path.expanduser("~/.newsong_flac_set")
 
 
 async def ensure_flac_quality(client):
@@ -132,6 +132,8 @@ async def ensure_flac_quality(client):
 
         await asyncio.sleep(2)
         print("QUALITY_SET", flush=True)
+        # Persist flag only after confirmed success
+        open(FLAC_QUALITY_FLAG, "w").close()
 
     except Exception as e:
         eprint(f"\u26a0\ufe0f  Could not auto-configure FLAC quality: {e}")
@@ -374,7 +376,6 @@ if __name__ == "__main__":
             # read_python_output in the bash script, so signals are visible)
             if mode in ("download", "link") and not os.path.exists(FLAC_QUALITY_FLAG):
                 await ensure_flac_quality(client)
-                open(FLAC_QUALITY_FLAG, "w").close()
 
             if mode == "search":
                 if len(sys.argv) < 3:

@@ -122,8 +122,6 @@ async def auth():
     print(f"\n  ✅ Logged in as {me.first_name} (@{me.username})")
     print(f"\n  ⚙️  Configuring @deezload2bot quality to FLAC...")
     await mod.ensure_flac_quality(client)
-    # Print friendly message (ensure_flac_quality prints QUALITY_SET as signal)
-    open("/tmp/newsong_quality_ok", "w").close()
     await client.disconnect()
 asyncio.run(auth())
 PYEOF
@@ -268,8 +266,9 @@ fi
 MARKER=$(mktemp)
 TDL_LOG=$(mktemp)
 
-# Run tdl silently in background
-tdl dl \
+# Run tdl in a new session to detach from controlling terminal
+# (tdl's progress bar writes directly to /dev/tty, bypassing redirects)
+setsid tdl dl \
     -u "https://t.me/deezload2bot/${TDL_MSGID}" \
     -d "$OUTPUT_DIR" \
     --template "{{ filenamify .FileName }}" \

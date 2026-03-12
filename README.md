@@ -197,7 +197,8 @@ For the curious — here's the full pipeline:
 3. You pick a number; FlacIt calls `results[idx].click()` to send that track into your bot chat — exactly as if you tapped it on your phone
 4. The bot processes it and delivers a FLAC document to the chat
 5. FlacIt detects the incoming file, extracts its message ID and file size, and hands it to **tdl** — which downloads using parallel connections at full speed
-6. While tdl runs, a live progress bar polls the growing file on disk and shows you `████████░░░░ 42% (11.2 / 27.9 MB)` in real time
+6. While tdl runs, a live progress bar polls the growing file on disk and shows you
+ `████████░░░░ 42% (11.2 / 27.9 MB)` in real time
 7. The file lands in your music folder named `Artist - Song.flac`
 
 ---

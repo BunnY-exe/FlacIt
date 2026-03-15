@@ -72,22 +72,59 @@ check_deps() {
 
 # ─── Argument parsing ──────────────────────────
 
+CUSTOM_DIR=""
 LINK_MODE=false
 DIRECT_LINK=""
+PLAYLIST_MODE=false
+PLAYLIST_QUERY=""
+QUERY=""
 
-if [[ "${1:-}" == "-l" ]]; then
-    shift
-    DIRECT_LINK="${1:-}"
-    [[ -z "$DIRECT_LINK" ]] && die "❌ Usage: newsong -l <track_url>"
-    LINK_MODE=true
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        -d)
+            shift
+            CUSTOM_DIR="${1:-}"
+            [[ -z "$CUSTOM_DIR" ]] && die "❌ -d requires a path. Usage: newsong -d \"~/music\" \"song\""
+            CUSTOM_DIR="${CUSTOM_DIR/#\~/$HOME}"
+            shift
+            ;;
+        -l)
+            shift
+            DIRECT_LINK="${1:-}"
+            [[ -z "$DIRECT_LINK" ]] && die "❌ -l requires a URL."
+            LINK_MODE=true
+            shift
+            ;;
+        -p)
+            shift
+            PLAYLIST_QUERY="${*}"
+            [[ -z "$PLAYLIST_QUERY" ]] && die "❌ -p requires a playlist name."
+            PLAYLIST_MODE=true
+            break
+            ;;
+        *)
+            QUERY="${*}"
+            break
+            ;;
+    esac
+done
+
+if [[ -n "$CUSTOM_DIR" ]]; then
+    OUTPUT_DIR="$CUSTOM_DIR"
 fi
 
-[[ $# -eq 0 ]] && { echo "Usage: newsong <song name>"; echo "       newsong -l <track_url>"; exit 1; }
+if [[ "$LINK_MODE" == true && "$PLAYLIST_MODE" == true ]]; then
+    die "❌ Use either -l or -p, not both."
+fi
 
-# Guard against empty query / empty link
-if [[ "$LINK_MODE" == false ]]; then
-    QUERY_CHECK="$*"
-    [[ -z "${QUERY_CHECK// /}" ]] && die "❌ Please provide a song name. Usage: newsong \"song name\""
+if [[ "$LINK_MODE" == false && "$PLAYLIST_MODE" == false ]]; then
+    [[ -z "${QUERY// /}" ]] && {
+        echo "Usage: newsong <song name>"
+        echo "       newsong -l <track_url>"
+        echo "       newsong -p <playlist name>"
+        echo "       newsong -d <folder> <song name|options>"
+        exit 1
+    }
 fi
 
 check_deps
@@ -190,7 +227,107 @@ read_python_output() {
     fi
 }
 
-if [[ "$LINK_MODE" == true ]]; then
+if [[ "$PLAYLIST_MODE" == true ]]; then
+    start_spinner "[1/4] 🔍 Searching playlists for: \"$PLAYLIST_QUERY\"..."
+
+    SEARCH_OUT=$("$PYTHON" "$PYTHON_HELPER" playlist_search "$PLAYLIST_QUERY" 2>"$PY_ERR") || {
+        stop_spinner
+        die "❌ $(cat "$PY_ERR")"
+    }
+    stop_spinner
+
+    mapfile -t PLAYLIST_LINES < <(echo "$SEARCH_OUT" | grep '^PLAYLIST:')
+    NUM=${#PLAYLIST_LINES[@]}
+    [[ $NUM -eq 0 ]] && die "❌ No playlists found for \"$PLAYLIST_QUERY\""
+
+    echo -e "${C_CYAN}[1/4]${C_RESET} Found ${C_GREEN}${NUM}${C_RESET} playlist(s):\n"
+    for line in "${PLAYLIST_LINES[@]}"; do
+        n=$(cut -d: -f2 <<< "$line")
+        display=$(cut -d: -f3- <<< "$line")
+        printf "    ${C_BOLD}%s.${C_RESET} %s\n" "$n" "$display"
+    done
+    echo ""
+
+    SELECTION=1
+    if [[ $NUM -gt 1 ]]; then
+        while true; do
+            read -rp "  Enter number (1-${NUM}): " choice
+            [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= NUM )) && {
+                SELECTION=$choice
+                break
+            }
+            echo "  Invalid. Enter 1–${NUM}."
+        done
+    fi
+
+    SELECTED_DISPLAY=$(cut -d: -f3- <<< "${PLAYLIST_LINES[$((SELECTION-1))]}")
+    echo -e "\n  ${C_GREEN}✅ Selected:${C_RESET} ${SELECTED_DISPLAY}"
+    echo ""
+    read -rp "  Download entire playlist? [Y/n]: " confirm
+    confirm="${confirm:-Y}"
+    [[ "$confirm" =~ ^[nN]$ ]] && { echo -e "${C_RED}❌ Discarded.${C_RESET}"; exit 0; }
+
+    echo ""
+    echo -e "${C_CYAN}[2/4]${C_RESET} 📨 Requesting playlist from @deezload2bot..."
+
+    PLAYLIST_DIR=""
+    PLAYLIST_TITLE=""
+    TRACK_COUNT=0
+    DOWNLOADED=0
+    PYTHON_EXIT=1
+    MSGID=""
+
+    exec 3< <("$PYTHON" "$PYTHON_HELPER" playlist_download "$SELECTION" "$OUTPUT_DIR" 2>"$PY_ERR"; echo "EXIT:$?")
+
+    while IFS= read -r line <&3; do
+        case "$line" in
+            EXIT:*)
+                PYTHON_EXIT="${line#EXIT:}"
+                break
+                ;;
+            PLAYLIST_DIR:*)
+                PLAYLIST_DIR="${line#PLAYLIST_DIR:}"
+                ;;
+            PLAYLIST_TITLE:*)
+                PLAYLIST_TITLE="${line#PLAYLIST_TITLE:}"
+                ;;
+            PLAYLIST_TRACKS:*)
+                TRACK_COUNT="${line#PLAYLIST_TRACKS:}"
+                ;;
+            PLAYLIST_DONE:*)
+                DOWNLOADED="${line#PLAYLIST_DONE:}"
+                echo -e "\n${C_CYAN}[3/4]${C_RESET} Got ${C_GREEN}${DOWNLOADED}${C_RESET} track(s) — downloading with tdl..."
+                ;;
+            TDL_PLAYLIST_MSGID:*)
+                MSGID="${line#TDL_PLAYLIST_MSGID:}"
+                ;;
+            TDL_PLAYLIST_FILENAME:*)
+                FNAME="${line#TDL_PLAYLIST_FILENAME:}"
+                echo -e "  ${C_GRAY}↓${C_RESET} ${FNAME}"
+                tdl dl -u deezload2bot --msg-id "$MSGID" -d "$PLAYLIST_DIR" > /dev/null 2>&1
+                ;;
+            \[PLAYLIST\]*)
+                echo -e "  ${C_CYAN}${line}${C_RESET}"
+                ;;
+            *)
+                [[ -n "$line" ]] && echo "$line"
+                ;;
+        esac
+    done
+    exec 3<&-
+
+    [[ "${PYTHON_EXIT:-1}" -ne 0 ]] && {
+        [[ -s "$PY_ERR" ]] && echo -e "${C_RED}$(cat "$PY_ERR")${C_RESET}" >&2
+        die "❌ Playlist download failed."
+    }
+
+    echo ""
+    echo -e "${C_CYAN}[4/4]${C_RESET} ${C_GREEN}✅ Playlist complete!${C_RESET}"
+    echo -e "\n  📁 Saved to: ${C_BOLD}${PLAYLIST_DIR}${C_RESET}"
+    echo -e "  🎵 ${DOWNLOADED} track(s) downloaded\n"
+    exit 0
+
+elif [[ "$LINK_MODE" == true ]]; then
     # ── Link mode ──────────────────────────────
     echo -e "  🔗 Link: ${C_BOLD}${DIRECT_LINK}${C_RESET}"
     echo ""

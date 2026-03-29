@@ -303,6 +303,8 @@ async def do_download(client, selection, output_dir):
                 break
 
     # Hand off to tdl for fast parallel download
+    bot_entity = await client.get_entity(BOT)
+    print(f"BOT_CHAT_ID:{bot_entity.id}", flush=True)
     print(f"TDL_MSGID:{flac_msg.id}", flush=True)
     print(f"TDL_FILENAME:{filename}", flush=True)
     print(f"TDL_FILESIZE:{flac_msg.document.size}", flush=True)
@@ -312,8 +314,8 @@ async def do_download(client, selection, output_dir):
 # Mode 3 — Playlist Search
 # ─────────────────────────────────────────────
 async def do_playlist(client, query):
-    """Search for a playlist using .pla inline query and print top results."""
-    results = await inline_query_with_retry(client, f".pla {query}")
+    """Search using .a inline query and print top results."""
+    results = await inline_query_with_retry(client, f".a {query}")
 
     if not results:
         eprint(f'❌ No playlists found for "{query}"')
@@ -354,7 +356,7 @@ async def do_playlist_download(client, selection, output_dir):
         eprint("❌ Invalid playlist cache. Run playlist search again.")
         sys.exit(1)
 
-    results = await inline_query_with_retry(client, f".pla {query}")
+    results = await inline_query_with_retry(client, f".a {query}")
     idx = selection - 1
     if not results or idx < 0 or idx >= len(results):
         eprint("❌ Invalid playlist selection. Search again and choose a valid number.")
@@ -394,7 +396,7 @@ async def do_playlist_download(client, selection, output_dir):
             except Exception:
                 pass
 
-    fresh = await inline_query_with_retry(client, f".pla {query}")
+    fresh = await inline_query_with_retry(client, f".a {query}")
     if fresh and idx < len(fresh):
         playlist_title = get_inline_title(fresh[idx]) or "playlist"
     else:
@@ -455,6 +457,7 @@ async def do_playlist_download(client, selection, output_dir):
 
             print(f"TDL_PLAYLIST_MSGID:{msg.id}", flush=True)
             print(f"TDL_PLAYLIST_FILENAME:{filename}", flush=True)
+            print(f"TDL_PLAYLIST_FILESIZE:{msg.document.size}", flush=True)
             downloaded += 1
 
         if time.time() - last_new_flac > idle_timeout and downloaded > 0:
@@ -462,6 +465,8 @@ async def do_playlist_download(client, selection, output_dir):
 
         await asyncio.sleep(3)
 
+    bot_entity = await client.get_entity(BOT)
+    print(f"BOT_CHAT_ID:{bot_entity.id}", flush=True)
     print(f"PLAYLIST_DONE:{downloaded}", flush=True)
 
 
@@ -527,6 +532,8 @@ async def do_link(client, link_url):
                 filename = attr.file_name
                 break
 
+    bot_entity = await client.get_entity(BOT)
+    print(f"BOT_CHAT_ID:{bot_entity.id}", flush=True)
     print(f"TDL_MSGID:{flac_msg.id}", flush=True)
     print(f"TDL_FILENAME:{filename}", flush=True)
     print(f"TDL_FILESIZE:{flac_msg.document.size}", flush=True)

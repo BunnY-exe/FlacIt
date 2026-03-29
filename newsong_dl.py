@@ -45,6 +45,39 @@ def eprint(*a, **k):
     print(*a, file=sys.stderr, **k)
 
 
+def get_inline_title(result):
+    """Return title from Telethon inline result variants."""
+    title = getattr(result, "title", None)
+    if title:
+        return title
+    inner = getattr(result, "result", None)
+    return getattr(inner, "title", "") if inner else ""
+
+
+def get_inline_description(result):
+    """Return description from Telethon inline result variants."""
+    desc = getattr(result, "description", None)
+    if desc:
+        return desc
+    inner = getattr(result, "result", None)
+    return getattr(inner, "description", "") if inner else ""
+
+
+def is_flac(msg):
+    """Check if a message carries an audio/flac file."""
+    if msg.audio:
+        return True
+    if msg.document:
+        mime = getattr(msg.document, "mime_type", "") or ""
+        if "flac" in mime:
+            return True
+        for a in getattr(msg.document, "attributes", []):
+            fn = getattr(a, "file_name", "") or ""
+            if fn.lower().endswith(".flac"):
+                return True
+    return False
+
+
 async def inline_query_with_retry(client, query):
     """Run inline_query with retries for BotResponseTimeoutError."""
     for attempt in range(INLINE_RETRIES):
@@ -166,8 +199,8 @@ async def do_search(client, query):
     # Print up to 10 tracks
     items = []
     for i, r in enumerate(results[:10], 1):
-        title = r.result.title or ""
-        desc  = r.result.description or ""
+        title = get_inline_title(r) or ""
+        desc = get_inline_description(r) or ""
         display = f"{title} — {desc}" if desc else title
         print(f"TRACK:{i}:{display}", flush=True)
         items.append({"title": title, "description": desc})
@@ -215,22 +248,8 @@ async def do_download(client, selection, output_dir):
 
     flac_msg = None
 
-    def is_audio(msg):
-        """Check if a message carries an audio/flac file."""
-        if msg.audio:
-            return True
-        if msg.document:
-            mime = getattr(msg.document, "mime_type", "") or ""
-            if "flac" in mime:
-                return True
-            for a in getattr(msg.document, "attributes", []):
-                fn = getattr(a, "file_name", "") or ""
-                if fn.lower().endswith(".flac"):
-                    return True
-        return False
-
     # Case 1: the click() return already carries the audio
-    if sent_msg and is_audio(sent_msg):
+    if sent_msg and is_flac(sent_msg):
         eprint(f"[debug] click() returned audio directly (id={sent_msg.id})")
         flac_msg = sent_msg
 
@@ -245,7 +264,7 @@ async def do_download(client, selection, output_dir):
             async for msg in client.iter_messages(BOT, limit=10):
                 if msg.date < check_after:
                     break
-                if is_audio(msg):
+                if is_flac(msg):
                     eprint(f"[debug] found audio in poll (id={msg.id}, out={msg.out})")
                     flac_msg = msg
                     break
@@ -258,7 +277,7 @@ async def do_download(client, selection, output_dir):
                 print("🔄 Bot is slow — retrying...", flush=True)
                 try:
                     retry_msg = await results[idx].click(BOT)
-                    if retry_msg and is_audio(retry_msg):
+                    if retry_msg and is_flac(retry_msg):
                         flac_msg = retry_msg
                         break
                 except Exception:
@@ -284,13 +303,175 @@ async def do_download(client, selection, output_dir):
                 break
 
     # Hand off to tdl for fast parallel download
+    bot_entity = await client.get_entity(BOT)
+    print(f"BOT_CHAT_ID:{bot_entity.id}", flush=True)
     print(f"TDL_MSGID:{flac_msg.id}", flush=True)
     print(f"TDL_FILENAME:{filename}", flush=True)
     print(f"TDL_FILESIZE:{flac_msg.document.size}", flush=True)
 
 
 # ─────────────────────────────────────────────
-# Mode 3 — Link: send URL, get FLAC
+# Mode 3 — Playlist Search
+# ─────────────────────────────────────────────
+async def do_playlist(client, query):
+    """Search using .a inline query and print top results."""
+    results = await inline_query_with_retry(client, f".a {query}")
+
+    if not results:
+        eprint(f'❌ No playlists found for "{query}"')
+        sys.exit(1)
+
+    count = min(len(results), 10)
+    for i, r in enumerate(results[:10], 1):
+        title = get_inline_title(r) or ""
+        desc = get_inline_description(r) or ""
+        tracks = ""
+        for line in desc.split("\n"):
+            if "tracks" in line.lower():
+                tracks = f"  [{line.strip()}]"
+                break
+        print(f"PLAYLIST:{i}:{title}{tracks}", flush=True)
+
+    with open(RESULTS_CACHE, "w") as f:
+        json.dump({"query": query, "mode": "playlist", "count": count}, f)
+
+
+# ─────────────────────────────────────────────
+# Mode 4 — Playlist Download
+# ─────────────────────────────────────────────
+async def do_playlist_download(client, selection, output_dir):
+    """Click the chosen playlist, click GET ALL, and collect FLAC messages."""
+    from telethon.tl.types import ReplyInlineMarkup
+    import re
+
+    try:
+        with open(RESULTS_CACHE, "r") as f:
+            cache = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        eprint("❌ No playlist cache found. Run playlist search first.")
+        sys.exit(1)
+
+    query = cache.get("query", "")
+    if not query:
+        eprint("❌ Invalid playlist cache. Run playlist search again.")
+        sys.exit(1)
+
+    results = await inline_query_with_retry(client, f".a {query}")
+    idx = selection - 1
+    if not results or idx < 0 or idx >= len(results):
+        eprint("❌ Invalid playlist selection. Search again and choose a valid number.")
+        sys.exit(1)
+
+    # Track the latest bot message before requesting playlist details.
+    last_id = 0
+    async for msg in client.iter_messages(BOT, limit=1):
+        last_id = msg.id
+
+    await results[idx].click(BOT)
+
+    info_msg = None
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        async for msg in client.iter_messages(BOT, limit=5):
+            if msg.id <= last_id:
+                break
+            if msg.out:
+                continue
+            if msg.reply_markup and isinstance(msg.reply_markup, ReplyInlineMarkup):
+                info_msg = msg
+                break
+        if info_msg:
+            break
+        await asyncio.sleep(1)
+
+    if not info_msg:
+        eprint("❌ Bot did not respond with playlist info.")
+        sys.exit(1)
+
+    track_count = 0
+    for line in (info_msg.text or "").split("\n"):
+        if "total tracks:" in line.lower():
+            try:
+                track_count = int(line.split(":")[-1].strip())
+            except Exception:
+                pass
+
+    fresh = await inline_query_with_retry(client, f".a {query}")
+    if fresh and idx < len(fresh):
+        playlist_title = get_inline_title(fresh[idx]) or "playlist"
+    else:
+        playlist_title = "playlist"
+
+    safe_title = re.sub(r'[<>:"/\\|?*]', "", playlist_title).strip() or "playlist"
+    playlist_dir = os.path.join(output_dir, safe_title)
+    os.makedirs(playlist_dir, exist_ok=True)
+
+    print(f"PLAYLIST_DIR:{playlist_dir}", flush=True)
+    print(f"PLAYLIST_TITLE:{safe_title}", flush=True)
+    print(f"PLAYLIST_TRACKS:{track_count}", flush=True)
+
+    clicked = False
+    for row in info_msg.reply_markup.rows:
+        for btn in row.buttons:
+            txt = (btn.text or "").lower()
+            if "get all" in txt or "⬇" in btn.text:
+                last_id = info_msg.id
+                await info_msg.click(text=btn.text)
+                clicked = True
+                break
+        if clicked:
+            break
+
+    if not clicked:
+        eprint("❌ Could not find GET ALL button.")
+        sys.exit(1)
+
+    print("[PLAYLIST] ⏳ Bot is sending tracks... this may take a while.", flush=True)
+
+    downloaded = 0
+    seen_ids = set()
+    last_new_flac = time.time()
+    idle_timeout = 45
+    max_wait = 3600
+    start = time.time()
+
+    while time.time() - start < max_wait:
+        async for msg in client.iter_messages(BOT, limit=30):
+            if msg.id in seen_ids:
+                continue
+            seen_ids.add(msg.id)
+            if msg.id <= last_id:
+                continue
+
+            if not is_flac(msg):
+                continue
+
+            last_new_flac = time.time()
+            filename = "track.flac"
+            if msg.document:
+                for attr in getattr(msg.document, "attributes", []):
+                    file_name = getattr(attr, "file_name", "")
+                    if file_name:
+                        filename = file_name
+                        break
+
+            print(f"TDL_PLAYLIST_MSGID:{msg.id}", flush=True)
+            print(f"TDL_PLAYLIST_FILENAME:{filename}", flush=True)
+            print(f"TDL_PLAYLIST_FILESIZE:{msg.document.size}", flush=True)
+            downloaded += 1
+
+        if time.time() - last_new_flac > idle_timeout and downloaded > 0:
+            break
+
+        await asyncio.sleep(3)
+
+    bot_entity = await client.get_entity(BOT)
+    print(f"BOT_CHAT_ID:{bot_entity.id}", flush=True)
+    print(f"PLAYLIST_DONE:{downloaded}", flush=True)
+
+
+# ─────────────────────────────────────────────
+# Mode 5 — Link: send URL, get FLAC
 # ─────────────────────────────────────────────
 async def do_link(client, link_url):
     from telethon.tl.types import DocumentAttributeFilename
@@ -308,20 +489,6 @@ async def do_link(client, link_url):
 
     print("[1/2] ⏳ Waiting for @deezload2bot...", flush=True)
 
-    def is_audio(msg):
-        """Check if a message carries an audio/flac file."""
-        if msg.audio:
-            return True
-        if msg.document:
-            mime = getattr(msg.document, "mime_type", "") or ""
-            if "flac" in mime:
-                return True
-            for a in getattr(msg.document, "attributes", []):
-                fn = getattr(a, "file_name", "") or ""
-                if fn.lower().endswith(".flac"):
-                    return True
-        return False
-
     flac_msg = None
     retried = False
     flac_wait_start = time.time()
@@ -331,7 +498,7 @@ async def do_link(client, link_url):
         async for msg in client.iter_messages(BOT, limit=10):
             if msg.date < check_after:
                 break
-            if is_audio(msg):
+            if is_flac(msg):
                 flac_msg = msg
                 break
         if flac_msg:
@@ -365,6 +532,8 @@ async def do_link(client, link_url):
                 filename = attr.file_name
                 break
 
+    bot_entity = await client.get_entity(BOT)
+    print(f"BOT_CHAT_ID:{bot_entity.id}", flush=True)
     print(f"TDL_MSGID:{flac_msg.id}", flush=True)
     print(f"TDL_FILENAME:{filename}", flush=True)
     print(f"TDL_FILESIZE:{flac_msg.document.size}", flush=True)
@@ -388,7 +557,7 @@ if __name__ == "__main__":
         try:
             # Ensure FLAC quality before download/link (stdout flows through
             # read_python_output in the bash script, so signals are visible)
-            if mode in ("download", "link") and not os.path.exists(FLAC_QUALITY_FLAG):
+            if mode in ("download", "playlist_download", "link") and not os.path.exists(FLAC_QUALITY_FLAG):
                 print("⚙️  Setting @deezload2bot quality to FLAC (one-time)...", flush=True)
                 await ensure_flac_quality(client)
 
@@ -404,6 +573,18 @@ if __name__ == "__main__":
                     sys.exit(1)
                 await do_download(client, int(sys.argv[2]), sys.argv[3])
 
+            elif mode == "playlist_search":
+                if len(sys.argv) < 3:
+                    eprint(f"Usage: {sys.argv[0]} playlist_search <query>")
+                    sys.exit(1)
+                await do_playlist(client, " ".join(sys.argv[2:]))
+
+            elif mode == "playlist_download":
+                if len(sys.argv) < 4:
+                    eprint(f"Usage: {sys.argv[0]} playlist_download <n> <output_dir>")
+                    sys.exit(1)
+                await do_playlist_download(client, int(sys.argv[2]), sys.argv[3])
+
             elif mode == "link":
                 if len(sys.argv) < 3:
                     eprint(f"Usage: {sys.argv[0]} link <url>")
@@ -413,6 +594,8 @@ if __name__ == "__main__":
             else:
                 eprint(f"Usage: {sys.argv[0]} search <query>")
                 eprint(f"       {sys.argv[0]} download <n> <output_dir>")
+                eprint(f"       {sys.argv[0]} playlist_search <query>")
+                eprint(f"       {sys.argv[0]} playlist_download <n> <output_dir>")
                 eprint(f"       {sys.argv[0]} link <url>")
                 sys.exit(1)
         finally:

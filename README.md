@@ -37,6 +37,8 @@ No Spotify Premium. No broken third-party APIs. No rate limits to dance around. 
 → Pick the exact version you want — artist, album, remaster, whatever
 → Fast parallel downloads via tdl — not slow single-stream
 → Direct link mode — newsong -l "spotify/deezer url" skips search entirely
+→ Playlist mode — newsong -p "playlist or album name" to collect and download all FLAC tracks
+→ Custom destination per run — newsong -d "~/Music" works with search, link, and playlist modes
 → Clean filenames — saved as Artist - Song.flac
 → Zero config — no API keys, no accounts, nothing to register
 → Minimal terminal UI — progress bar, spinner, color
@@ -178,6 +180,25 @@ newsong -l "https://open.spotify.com/track/7tFiyTwD0nx5a1eklYtX2J"
 newsong -l "https://www.deezer.com/track/3135556"
 ```
 
+**Playlist mode** — search and download an entire playlist/collection:
+
+```bash
+newsong -p "Metro in dino"
+newsong -p "Arijit Singh hits"
+```
+
+FlacIt will show matching playlist results, let you choose one, then collect all incoming FLAC message IDs from the bot and download tracks one-by-one into a dedicated subfolder.
+
+**Custom destination mode** — override output folder for one run:
+
+```bash
+newsong -d "~/test-music" "O Rangrez"
+newsong -d "/tmp/flac" -l "https://open.spotify.com/track/..."
+newsong -d "~/playlists" -p "Metro in dino"
+```
+
+`-d` does not change your permanent default. It only overrides the destination for that command.
+
 Sometimes the inline search returns the wrong version — a remix, a live recording, a different album cut. If that happens, find the exact track on Spotify or Deezer, copy the share link, and use `-l` to download that specific version directly. The bot resolves the link and sends the correct FLAC.
 
 ---
@@ -215,6 +236,8 @@ For the curious — here's the full pipeline:
 | `BotResponseTimeoutError` | Bot is busy, FlacIt retries automatically up to 3 times |
 | First run asks for phone number | Expected — enter your Telegram phone number and the code sent to your app |
 | Wrong song downloaded | Use `newsong -l "spotify-link"` to specify the exact track |
+| Playlist starts but no tracks download | Ensure `tdl login` is active and retry `newsong -p "..."`; bot delivery can be delayed by tens of seconds |
+| Output path not where expected | Use `-d` with an absolute path, or `~/folder` for home-relative destination |
 
 ---
 

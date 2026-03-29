@@ -72,22 +72,59 @@ check_deps() {
 
 # ─── Argument parsing ──────────────────────────
 
+CUSTOM_DIR=""
 LINK_MODE=false
 DIRECT_LINK=""
+PLAYLIST_MODE=false
+PLAYLIST_QUERY=""
+QUERY=""
 
-if [[ "${1:-}" == "-l" ]]; then
-    shift
-    DIRECT_LINK="${1:-}"
-    [[ -z "$DIRECT_LINK" ]] && die "❌ Usage: newsong -l <track_url>"
-    LINK_MODE=true
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        -d)
+            shift
+            CUSTOM_DIR="${1:-}"
+            [[ -z "$CUSTOM_DIR" ]] && die "❌ -d requires a path. Usage: newsong -d \"~/music\" \"song\""
+            CUSTOM_DIR="${CUSTOM_DIR/#\~/$HOME}"
+            shift
+            ;;
+        -l)
+            shift
+            DIRECT_LINK="${1:-}"
+            [[ -z "$DIRECT_LINK" ]] && die "❌ -l requires a URL."
+            LINK_MODE=true
+            shift
+            ;;
+        -p)
+            shift
+            PLAYLIST_QUERY="${*}"
+            [[ -z "$PLAYLIST_QUERY" ]] && die "❌ -p requires a playlist name."
+            PLAYLIST_MODE=true
+            break
+            ;;
+        *)
+            QUERY="${*}"
+            break
+            ;;
+    esac
+done
+
+if [[ -n "$CUSTOM_DIR" ]]; then
+    OUTPUT_DIR="$CUSTOM_DIR"
 fi
 
-[[ $# -eq 0 ]] && { echo "Usage: newsong <song name>"; echo "       newsong -l <track_url>"; exit 1; }
+if [[ "$LINK_MODE" == true && "$PLAYLIST_MODE" == true ]]; then
+    die "❌ Use either -l or -p, not both."
+fi
 
-# Guard against empty query / empty link
-if [[ "$LINK_MODE" == false ]]; then
-    QUERY_CHECK="$*"
-    [[ -z "${QUERY_CHECK// /}" ]] && die "❌ Please provide a song name. Usage: newsong \"song name\""
+if [[ "$LINK_MODE" == false && "$PLAYLIST_MODE" == false ]]; then
+    [[ -z "${QUERY// /}" ]] && {
+        echo "Usage: newsong <song name>"
+        echo "       newsong -l <track_url>"
+        echo "       newsong -p <playlist name>"
+        echo "       newsong -d <folder> <song name|options>"
+        exit 1
+    }
 fi
 
 check_deps
@@ -143,6 +180,7 @@ trap 'stop_spinner; rm -f "$PY_ERR" /tmp/newsong_tdl_out' EXIT
 
 # ── Helper: read Python stdout for TDL lines ──
 read_python_output() {
+    BOT_CHAT_ID=""
     TDL_MSGID=""
     TDL_FILENAME=""
     PYTHON_EXIT=1
@@ -156,6 +194,9 @@ read_python_output() {
                 ;;
             TDL_MSGID:*)
                 TDL_MSGID="${line#TDL_MSGID:}"
+                ;;
+            BOT_CHAT_ID:*)
+                BOT_CHAT_ID="${line#BOT_CHAT_ID:}"
                 ;;
             TDL_FILENAME:*)
                 TDL_FILENAME="${line#TDL_FILENAME:}"
@@ -188,9 +229,269 @@ read_python_output() {
     if [[ -z "$TDL_MSGID" ]]; then
         die "❌ Could not get message ID for download."
     fi
+    if [[ -z "$BOT_CHAT_ID" ]]; then
+        die "❌ Could not get bot chat ID for download."
+    fi
 }
 
-if [[ "$LINK_MODE" == true ]]; then
+download_with_progress() {
+    local URL="$1"
+    local DEST="$2"
+    local LABEL="$3"
+    local TOTAL_MB="${4:-}"
+    local EXPECTED_FILENAME="${5:-}"
+
+    local TERM_COLS
+    TERM_COLS=$(tput cols 2>/dev/null || echo 100)
+    local DISP_LABEL="$LABEL"
+    local BAR_WIDTH=20
+    local STATIC_WIDTH
+    if [[ -n "$TOTAL_MB" ]]; then
+        # Fixed rendered chars excluding label:
+        # leading spaces + separators + bar + pct + "(cur / total MB)"
+        STATIC_WIDTH=$(( 2 + 2 + BAR_WIDTH + 2 + 5 + 2 + 7 + ${#TOTAL_MB} + 5 ))
+    else
+        # leading spaces + separators + bar + pct + "(cur MB)"
+        STATIC_WIDTH=$(( 2 + 2 + BAR_WIDTH + 2 + 5 + 2 + 10 ))
+    fi
+    local MAX_LABEL=$(( TERM_COLS - STATIC_WIDTH ))
+    (( MAX_LABEL < 12 )) && MAX_LABEL=12
+    (( MAX_LABEL > 48 )) && MAX_LABEL=48
+    if (( ${#DISP_LABEL} > MAX_LABEL )); then
+        DISP_LABEL="${DISP_LABEL:0:$((MAX_LABEL-1))}…"
+    fi
+
+    local MARKER
+    MARKER=$(mktemp)
+
+    local TOT_BYTES=0
+    if [[ -n "$TOTAL_MB" ]]; then
+        TOT_BYTES=$(awk "BEGIN { printf \"%d\", $TOTAL_MB * 1048576 }")
+    fi
+
+    tdl dl -u "$URL" -d "$DEST" --continue --template '{{ filenamify .FileName }}' > /dev/null 2>&1 &
+    local TDL_PID=$!
+    local LAST_CUR=0
+    local LAST_PCT=0
+    local LAST_RENDER=""
+
+    while kill -0 "$TDL_PID" 2>/dev/null; do
+        local PARTIAL_FILE=""
+        if [[ -n "$EXPECTED_FILENAME" && -f "$DEST/$EXPECTED_FILENAME" ]]; then
+            PARTIAL_FILE="$DEST/$EXPECTED_FILENAME"
+        else
+            PARTIAL_FILE=$(find "$DEST" -maxdepth 1 \( -name "*.flac" -o -name "*.mp3" -o -name "*.tmp" \) -newer "$MARKER" 2>/dev/null | head -1)
+        fi
+
+        local CUR=0
+        if [[ -n "$PARTIAL_FILE" ]]; then
+            CUR=$(stat -c%s "$PARTIAL_FILE" 2>/dev/null || echo 0)
+        fi
+        if (( CUR < LAST_CUR )); then
+            CUR=$LAST_CUR
+        fi
+        LAST_CUR=$CUR
+
+        local PCT=0
+        if (( TOT_BYTES > 0 )); then
+            PCT=$(awk "BEGIN { printf \"%d\", ($CUR / $TOT_BYTES) * 100 }")
+            (( PCT > 100 )) && PCT=100
+            if (( PCT < LAST_PCT )); then
+                PCT=$LAST_PCT
+            fi
+        fi
+        LAST_PCT=$PCT
+
+        local FILLED=$(( PCT * BAR_WIDTH / 100 ))
+        local EMPTY=$(( BAR_WIDTH - FILLED ))
+        local BAR_F=""
+        local BAR_E=""
+        for ((b=0; b<FILLED; b++)); do BAR_F+="█"; done
+        for ((b=0; b<EMPTY;  b++)); do BAR_E+="░"; done
+
+        local MB_CUR
+        MB_CUR=$(awk "BEGIN { printf \"%.1f\", $CUR / 1048576 }")
+
+        local RENDER_KEY="${PCT}|${MB_CUR}|${DISP_LABEL}"
+        if [[ "$RENDER_KEY" == "$LAST_RENDER" ]]; then
+            sleep 0.2
+            continue
+        fi
+        LAST_RENDER="$RENDER_KEY"
+
+        if [[ -n "$TOTAL_MB" ]]; then
+            printf "\r\033[K  ${C_CYAN}%s${C_RESET}  ${C_GREEN}%s${C_RESET}${C_GRAY}%s${C_RESET}  ${C_BOLD_WHITE}%3d%%${C_RESET}  (%s / %s MB)" \
+                "$DISP_LABEL" "$BAR_F" "$BAR_E" "$PCT" "$MB_CUR" "$TOTAL_MB"
+        else
+            printf "\r\033[K  ${C_CYAN}%s${C_RESET}  ${C_GREEN}%s${C_RESET}${C_GRAY}%s${C_RESET}  ${C_BOLD_WHITE}%3d%%${C_RESET}  (%s MB)" \
+                "$DISP_LABEL" "$BAR_F" "$BAR_E" "$PCT" "$MB_CUR"
+        fi
+
+        sleep 0.2
+    done
+
+    wait "$TDL_PID"
+    local EXIT_CODE=$?
+
+    printf "\r\033[K"
+    rm -f "$MARKER"
+    return "$EXIT_CODE"
+}
+
+if [[ "$PLAYLIST_MODE" == true ]]; then
+    start_spinner "[1/4] 🔍 Searching playlists for: \"$PLAYLIST_QUERY\"..."
+
+    SEARCH_OUT=$("$PYTHON" "$PYTHON_HELPER" playlist_search "$PLAYLIST_QUERY" 2>"$PY_ERR") || {
+        stop_spinner
+        die "❌ $(cat "$PY_ERR")"
+    }
+    stop_spinner
+
+    mapfile -t PLAYLIST_LINES < <(echo "$SEARCH_OUT" | grep '^PLAYLIST:')
+    NUM=${#PLAYLIST_LINES[@]}
+    [[ $NUM -eq 0 ]] && die "❌ No playlists found for \"$PLAYLIST_QUERY\""
+
+    echo -e "${C_CYAN}[1/4]${C_RESET} Found ${C_GREEN}${NUM}${C_RESET} playlist(s):\n"
+    for line in "${PLAYLIST_LINES[@]}"; do
+        n=$(cut -d: -f2 <<< "$line")
+        display=$(cut -d: -f3- <<< "$line")
+        printf "    ${C_BOLD}%s.${C_RESET} %s\n" "$n" "$display"
+    done
+    echo ""
+
+    SELECTION=1
+    if [[ $NUM -gt 1 ]]; then
+        while true; do
+            read -rp "  Enter number (1-${NUM}): " choice
+            [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= NUM )) && {
+                SELECTION=$choice
+                break
+            }
+            echo "  Invalid. Enter 1–${NUM}."
+        done
+    fi
+
+    SELECTED_DISPLAY=$(cut -d: -f3- <<< "${PLAYLIST_LINES[$((SELECTION-1))]}")
+    echo -e "\n  ${C_GREEN}✅ Selected:${C_RESET} ${SELECTED_DISPLAY}"
+    echo ""
+    read -rp "  Download entire playlist? [Y/n]: " confirm
+    confirm="${confirm:-Y}"
+    [[ "$confirm" =~ ^[nN]$ ]] && { echo -e "${C_RED}❌ Discarded.${C_RESET}"; exit 0; }
+
+    echo ""
+    echo -e "${C_CYAN}[2/4]${C_RESET} 📨 Requesting playlist from @deezload2bot..."
+
+    PLAYLIST_DIR=""
+    PLAYLIST_TITLE=""
+    TRACK_COUNT=0
+    DOWNLOADED=0
+    PYTHON_EXIT=1
+    BOT_CHAT_ID=""
+    declare -a MSGIDS=()
+    declare -a FILENAMES=()
+    declare -a FILESIZES=()
+    CURRENT_MSGID=""
+
+    exec 3< <("$PYTHON" "$PYTHON_HELPER" playlist_download "$SELECTION" "$OUTPUT_DIR" 2>"$PY_ERR"; echo "EXIT:$?")
+
+    while IFS= read -r line <&3; do
+        case "$line" in
+            EXIT:*)
+                PYTHON_EXIT="${line#EXIT:}"
+                break
+                ;;
+            PLAYLIST_DIR:*)
+                PLAYLIST_DIR="${line#PLAYLIST_DIR:}"
+                ;;
+            PLAYLIST_TITLE:*)
+                PLAYLIST_TITLE="${line#PLAYLIST_TITLE:}"
+                ;;
+            PLAYLIST_TRACKS:*)
+                TRACK_COUNT="${line#PLAYLIST_TRACKS:}"
+                ;;
+            BOT_CHAT_ID:*)
+                BOT_CHAT_ID="${line#BOT_CHAT_ID:}"
+                ;;
+            PLAYLIST_DONE:*)
+                DOWNLOADED="${line#PLAYLIST_DONE:}"
+                echo -e "\n${C_CYAN}[3/4]${C_RESET} Collected ${C_GREEN}${DOWNLOADED}${C_RESET} track(s) — starting downloads..."
+                ;;
+            TDL_PLAYLIST_MSGID:*)
+                CURRENT_MSGID="${line#TDL_PLAYLIST_MSGID:}"
+                ;;
+            TDL_PLAYLIST_FILENAME:*)
+                FNAME="${line#TDL_PLAYLIST_FILENAME:}"
+                if [[ -n "$CURRENT_MSGID" ]]; then
+                    MSGIDS+=("$CURRENT_MSGID")
+                    FILENAMES+=("$FNAME")
+                fi
+                ;;
+            TDL_PLAYLIST_FILESIZE:*)
+                FILESIZES+=("${line#TDL_PLAYLIST_FILESIZE:}")
+                ;;
+            \[PLAYLIST\]*)
+                echo -e "  ${C_CYAN}${line}${C_RESET}"
+                ;;
+            *)
+                [[ -n "$line" ]] && echo "$line"
+                ;;
+        esac
+    done
+    exec 3<&-
+
+    [[ "${PYTHON_EXIT:-1}" -ne 0 ]] && {
+        [[ -s "$PY_ERR" ]] && echo -e "${C_RED}$(cat "$PY_ERR")${C_RESET}" >&2
+        die "❌ Playlist collection failed."
+    }
+
+    TOTAL=${#MSGIDS[@]}
+    if [[ "$TOTAL" -eq 0 ]]; then
+        die "❌ No tracks were collected from bot output."
+    fi
+    if [[ -z "$BOT_CHAT_ID" ]]; then
+        die "❌ Could not get bot chat ID for playlist download."
+    fi
+
+    echo -e "${C_CYAN}[3/4]${C_RESET} Downloading ${C_GREEN}${TOTAL}${C_RESET} track(s) into: ${C_BOLD}${PLAYLIST_DIR}${C_RESET}\n"
+
+    # Ensure no leftover tdl processes are holding the database lock
+    pkill -f "tdl dl" 2>/dev/null || true
+    sleep 1
+
+    for i in "${!MSGIDS[@]}"; do
+        MSGID="${MSGIDS[$i]}"
+        FNAME="${FILENAMES[$i]}"
+        FILESIZES_i="${FILESIZES[$i]:-0}"
+        NUM_DL=$((i + 1))
+
+        TOTAL_MB=""
+        if [[ "$FILESIZES_i" -gt 0 ]]; then
+            TOTAL_MB=$(awk "BEGIN { printf \"%.1f\", $FILESIZES_i / 1048576 }")
+        fi
+        if download_with_progress \
+            "https://t.me/deezload2bot/${MSGID}" \
+            "$PLAYLIST_DIR" \
+            "[${NUM_DL}/${TOTAL}] ${FNAME}" \
+            "$TOTAL_MB" \
+            "$FNAME"; then
+            printf "  ${C_GRAY}[%d/%d]${C_RESET} ${C_GREEN}✓${C_RESET} %s\n" "$NUM_DL" "$TOTAL" "$FNAME"
+        else
+            printf "  ${C_GRAY}[%d/%d]${C_RESET} ${C_RED}✗ failed${C_RESET} %s\n" "$NUM_DL" "$TOTAL" "$FNAME"
+        fi
+
+        # Give tdl time to fully release its database lock before next download
+        sleep 2
+    done
+
+    DOWNLOADED="$TOTAL"
+
+    echo ""
+    echo -e "${C_CYAN}[4/4]${C_RESET} ${C_GREEN}✅ Playlist complete!${C_RESET}"
+    echo -e "\n  📁 Saved to: ${C_BOLD}${PLAYLIST_DIR}${C_RESET}"
+    echo -e "  🎵 ${DOWNLOADED} track(s) downloaded\n"
+    exit 0
+
+elif [[ "$LINK_MODE" == true ]]; then
     # ── Link mode ──────────────────────────────
     echo -e "  🔗 Link: ${C_BOLD}${DIRECT_LINK}${C_RESET}"
     echo ""
@@ -262,76 +563,23 @@ else
     DL_STEP="[4/4]"
 fi
 
-# Timestamp marker so we can find exactly which file tdl creates
 MARKER=$(mktemp)
-TDL_LOG=$(mktemp)
+TOTAL_MB=""
+if [[ "${TDL_FILESIZE:-0}" -gt 0 ]]; then
+    TOTAL_MB=$(awk "BEGIN { printf \"%.1f\", ${TDL_FILESIZE:-0} / 1048576 }")
+fi
+LABEL="${DL_STEP} 📥 ${TDL_FILENAME}"
 
-# Run tdl in a new session to detach from controlling terminal
-# (tdl's progress bar writes directly to /dev/tty, bypassing redirects)
-setsid tdl dl \
-    -u "https://t.me/deezload2bot/${TDL_MSGID}" \
-    -d "$OUTPUT_DIR" \
-    --template "{{ filenamify .FileName }}" \
-    > "$TDL_LOG" 2>&1 &
-TDL_PID=$!
-
-# Helper: find the file tdl is currently writing
-find_tdl_file() {
-    # First try exact expected filename
-    if [[ -f "$OUTPUT_DIR/$TDL_FILENAME" ]]; then
-        echo "$OUTPUT_DIR/$TDL_FILENAME"
-        return
-    fi
-    # Fall back: find newest file modified after tdl started
-    find "$OUTPUT_DIR" -maxdepth 1 \( -name "*.flac" -o -name "*.mp3" -o -name "*.tmp" \) \
-        -newer "$MARKER" 2>/dev/null | head -1
-}
-
-# Draw progress bar by polling the growing file on disk
-BAR_WIDTH=30
-while kill -0 "$TDL_PID" 2>/dev/null; do
-    PARTIAL_FILE=$(find_tdl_file)
-    if [[ -n "$PARTIAL_FILE" ]]; then
-        CUR=$(stat -c%s "$PARTIAL_FILE" 2>/dev/null || echo 0)
-    else
-        CUR=0
-    fi
-
-    TOT="${TDL_FILESIZE:-0}"
-    PCT=0
-    if (( TOT > 0 )); then
-        PCT=$(awk "BEGIN { printf \"%d\", ($CUR / $TOT) * 100 }")
-    fi
-    FILLED=$(( PCT * BAR_WIDTH / 100 ))
-    EMPTY=$(( BAR_WIDTH - FILLED ))
-
-    BAR_F=""; BAR_E=""
-    for ((j=0; j<FILLED; j++)); do BAR_F+="█"; done
-    for ((j=0; j<EMPTY;  j++)); do BAR_E+="░"; done
-
-    MB_CUR=$(awk "BEGIN { printf \"%.1f\", $CUR  / 1048576 }")
-    MB_TOT=$(awk "BEGIN { printf \"%.1f\", $TOT  / 1048576 }")
-
-    printf "\r  ${C_CYAN}${DL_STEP} 📥 Downloading${C_RESET}  ${C_GREEN}%b${C_RESET}${C_GRAY}%b${C_RESET}  ${C_BOLD_WHITE}%3d%%${C_RESET}  (%s / %s MB)" \
-        "$BAR_F" "$BAR_E" "$PCT" "$MB_CUR" "$MB_TOT"
-
-    sleep 1
-done
-
-# Clear the progress line and collect exit code
-printf "\r\033[K"
-wait "$TDL_PID"; TDL_EXIT=$?
-
-[[ $TDL_EXIT -ne 0 ]] && {
-    cat "$TDL_LOG" >&2
-    rm -f "$TDL_LOG"
+if download_with_progress \
+    "https://t.me/deezload2bot/${TDL_MSGID}" \
+    "$OUTPUT_DIR" \
+    "$LABEL" \
+    "$TOTAL_MB" \
+    "$TDL_FILENAME"; then
+    echo -e "  ${C_CYAN}${DL_STEP}${C_RESET} 📥 ${C_GREEN}✓${C_RESET} ${TDL_FILENAME}"
+else
     die "❌ tdl download failed."
-}
-
-# Extract speed summary from tdl output
-SUMMARY=$(grep -oP '\[.*done.*\]' "$TDL_LOG" | tail -1 || true)
-echo -e "  ${C_CYAN}${DL_STEP}${C_RESET} 📥 ${C_GREEN}✓${C_RESET} ${TDL_FILENAME}  ${C_GRAY}${SUMMARY}${C_RESET}"
-rm -f "$TDL_LOG"
+fi
 
 # Locate the downloaded file — prefer the exact filename tdl was given
 SAVED_PATH="$OUTPUT_DIR/$TDL_FILENAME"
